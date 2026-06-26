@@ -1,82 +1,92 @@
-#### Packages used in this code ####
+#### Packages ####
 library(tidyverse)
-library(ggpmisc)
 
 #### User inputs ####
-# File path
-data <- read.csv("06182026_Standards_only.csv")
+# Path to your CSV file (change as needed)
+data <- read.csv("Data/06262026.csv")
 
+# Which standard levels (1–7) should be flagged as problematic?
+# Example: ROWS_TO_DROP <- c(3, 5)  # drops std3 and std5
+ROWS_TO_DROP <- c()   # modify after inspecting the full curve
 
-# Potential problem standards
-ROWS_TO_DROP <- c()   # only change this after checking the curve with all points
-
-#### Concentration Vector creation ####
-# Concentrations for the standards (ppm)
+#### Concentration vector (µM) – index matches standard level ####
+# std1 → 0, std2 → 3.1, …, std7 → 88.6
 concentrations <- c(0, 3.1, 6.1, 11.9, 28.2, 51.7, 88.6)
-data <- data %>% rename(Absorbance = X880nm..Abs.)
-#### Building the data frame of just standards to be graphed ####
-# New CSV format is already long: one row per measurement.
-# Columns: #, Sample ID, User Name, Date and Time, 880nm (Abs)
-# Each standard (std1–std7) appears 3 times — one row per replicate.
+JITTER_WIDTH <- 0.15
+#### Clean and rename columns ####
+data <- data %>%
+  rename(
+    Absorbance = `X880nm..Abs.`,
+    Sample.ID  = `Sample.ID`
+  )
 
-# Rename the absorbance column to something R-friendly
-names(data)[names(data) == "880nm (Abs)"] <- "Absorbance"
-names(data)[names(data) == "Sample ID"]   <- "Sample.ID"
-
-standards_clean <- data %>%
-  group_by(Sample.ID) %>%
-  mutate(Replication = paste0("Rep_", row_number())) %>%  # label reps within each standard
-  ungroup() %>%
+#### Extract only standards and parse level/replicate ####
+standards_raw <- data %>%
+  filter(str_detect(Sample.ID, "^std")) %>%          # keep only standards
   mutate(
-    Standard_Level = as.integer(factor(Sample.ID, levels = unique(Sample.ID))), # 1–7 in order of appearance
-    Concentration  = concentrations[Standard_Level],
-    Flagged        = Standard_Level %in% ROWS_TO_DROP
+    # Extract the numeric level (e.g., "std1_1" → 1)
+    Standard_Level = as.numeric(str_extract(Sample.ID, "(?<=std)\\d+")),
+    # Extract replicate number (e.g., "std1_1" → 1)
+    Replication    = as.numeric(str_extract(Sample.ID, "\\d+$"))
+  ) %>%
+  filter(!is.na(Standard_Level)) %>%                 # safety check
+  mutate(
+    Concentration = concentrations[Standard_Level],  # map to concentration
+    Flagged       = Standard_Level %in% ROWS_TO_DROP
   ) %>%
   select(Standard_Level, Concentration, Replication, Absorbance, Flagged)
 
-#### Plot 1: All standards (Showing flagged if applicable) ####
-standards_good    <- standards_clean %>% filter(!Flagged)
-standards_flagged <- standards_clean %>% filter(Flagged)
+#### Plot 1: All standards (flagged shown) ####
+standards_good    <- standards_raw %>% filter(!Flagged)
+standards_flagged <- standards_raw %>% filter(Flagged)
 
-fit_all       <- lm(Absorbance ~ Concentration, data = standards_clean)
+# Fit on all data (but flagged points are still in the regression? 
+# The code uses standards_clean for the fit, so it includes flagged points.
+# We'll fit using all points, but the plot will show flagged separately.
+fit_all       <- lm(Absorbance ~ Concentration, data = standards_raw)
 r2_all        <- summary(fit_all)$r.squared
 slope_all     <- coef(fit_all)[["Concentration"]]
 intercept_all <- coef(fit_all)[["(Intercept)"]]
 
 label_all <- paste0(
-  "R² = ", round(r2_all, 4), " (all standards) \n ",
+  "R² = ", round(r2_all, 4), " (all standards)\n",
   "Slope = ", round(slope_all, 4), "\n",
   "Intercept = ", round(intercept_all, 4)
 )
 
 plot_all <- ggplot() +
+  # Dashed lines connecting replicates of the same standard level
   geom_line(
-    data = standards_clean,
+    data = standards_raw,
     aes(x = Concentration, y = Absorbance, group = Standard_Level),
     color = "gray80", linetype = "dashed"
   ) +
+  # Good points (colored by replicate)
   geom_point(
     data = standards_good,
-    aes(x = Concentration, y = Absorbance, color = Replication),
-    size = 3, alpha = 0.85
+    aes(x = Concentration, y = Absorbance, color = as.factor(Replication)),
+    size = 3, alpha = 0.85,
+    position = position_jitter(width = JITTER_WIDTH, height = 0)
   ) +
+  # Flagged points (red X)
   geom_point(
     data = standards_flagged,
     aes(x = Concentration, y = Absorbance),
-    color = "firebrick", size = 4, shape = 4,
-    stroke = 1.5
+    color = "firebrick", size = 4, shape = 4, stroke = 1.5,
+    position = position_jitter(width = JITTER_WIDTH, height = 0)
   ) +
+  # Label for flagged points
   geom_label(
     data = standards_flagged %>%
       group_by(Standard_Level, Concentration) %>%
       summarise(Absorbance = max(Absorbance), .groups = "drop"),
     aes(x = Concentration, y = Absorbance, label = "FLAGGED"),
     color = "firebrick", fill = "white", size = 3,
-    vjust = -0.6,
-    label.size = 0.3
+    vjust = -0.6, label.size = 0.3
   ) +
+  # Regression line (fitted on all points)
   geom_smooth(
-    data = standards_clean,
+    data = standards_raw,
     aes(x = Concentration, y = Absorbance),
     method = "lm", se = TRUE,
     color = "black", fill = "steelblue", alpha = 0.15,
@@ -84,21 +94,22 @@ plot_all <- ggplot() +
   ) +
   annotate(
     "label",
-    x     = min(standards_good$Concentration, na.rm = TRUE),
-    y     = max(standards_clean$Absorbance,   na.rm = TRUE),
+    x = min(standards_raw$Concentration, na.rm = TRUE),
+    y = max(standards_raw$Absorbance,   na.rm = TRUE),
     label = label_all,
     hjust = 0, vjust = 1,
-    size  = 3.8, fontface = "bold",
-    fill  = "white", label.size = 0.3
+    size = 3.8, fontface = "bold",
+    fill = "white", label.size = 0.3
   ) +
   labs(
     title    = "Full Calibration Curve (Flagged Standards Shown)",
     subtitle = paste(
-      "Red ✕ marks = flagged rows:", paste(ROWS_TO_DROP, collapse = ", "),
-      "| Regression fitted to non-flagged points only"
+      "Red ✕ marks = flagged levels:",
+      paste(ROWS_TO_DROP, collapse = ", "),
+      "| Regression uses all points"
     ),
-    x     = "Concentration (µM)",
-    y     = "Absorbance",
+    x = "Concentration (µM)",
+    y = "Absorbance",
     color = "Replicate"
   ) +
   theme_minimal(base_size = 12) +
@@ -109,11 +120,11 @@ plot_all <- ggplot() +
   )
 print(plot_all)
 
-#### Plot 2 — Calibration curve with flagged standards removed ####
-standards_filtered <- standards_clean %>% filter(!Flagged)
+#### Plot 2: Filtered curve (flagged levels removed) ####
+standards_filtered <- standards_raw %>% filter(!Flagged)
 
-fit_filtered       <- lm(Absorbance ~ Concentration, data = standards_filtered)
-r2_filtered        <- summary(fit_filtered)$r.squared
+fit_filtered <- lm(Absorbance ~ Concentration, data = standards_filtered)
+r2_filtered  <- summary(fit_filtered)$r.squared
 slope_filtered     <- coef(fit_filtered)[["Concentration"]]
 intercept_filtered <- coef(fit_filtered)[["(Intercept)"]]
 
@@ -126,17 +137,18 @@ label_filtered <- paste0(
 )
 
 cat("=== R² Comparison ===\n")
-cat("All standards (excl. flagged):", round(r2_all, 4), "\n")
-cat("Filtered standards only:       ", round(r2_filtered, 4), "\n\n")
+cat("All standards (incl. flagged):", round(r2_all, 4), "\n")
+cat("Filtered standards only:      ", round(r2_filtered, 4), "\n\n")
 
-plot_filtered <- ggplot(data = standards_filtered, aes(x = Concentration, y = Absorbance)) +
+plot_filtered <- ggplot(standards_filtered, aes(x = Concentration, y = Absorbance)) +
   geom_line(
     aes(group = Standard_Level),
     color = "gray80", linetype = "dashed"
   ) +
   geom_point(
-    aes(color = Replication),
-    size = 3, alpha = 0.85
+    aes(color = as.factor(Replication)),
+    size = 3, alpha = 0.85,
+    position = position_jitter(width = JITTER_WIDTH, height = 0)
   ) +
   geom_smooth(
     method = "lm", se = TRUE,
@@ -145,22 +157,22 @@ plot_filtered <- ggplot(data = standards_filtered, aes(x = Concentration, y = Ab
   ) +
   annotate(
     "label",
-    x     = min(standards_filtered$Concentration, na.rm = TRUE),
-    y     = max(standards_filtered$Absorbance,    na.rm = TRUE),
+    x = min(standards_filtered$Concentration, na.rm = TRUE),
+    y = max(standards_filtered$Absorbance,    na.rm = TRUE),
     label = label_filtered,
     hjust = 0, vjust = 1,
-    size  = 3.8, fontface = "bold",
-    fill  = "white", label.size = 0.3
+    size = 3.8, fontface = "bold",
+    fill = "white", label.size = 0.3
   ) +
   labs(
     title    = "Filtered Calibration Curve",
     subtitle = paste0(
-      "Rows removed: ", paste(ROWS_TO_DROP, collapse = ", "),
+      "Removed levels: ", paste(ROWS_TO_DROP, collapse = ", "),
       " | R² ", r2_direction, " from ", round(r2_all, 4),
       " → ", round(r2_filtered, 4)
     ),
-    x     = "Concentration (µM)",
-    y     = "Absorbance (AU)",
+    x = "Concentration (µM)",
+    y = "Absorbance (AU)",
     color = "Replicate"
   ) +
   theme_minimal(base_size = 12) +
