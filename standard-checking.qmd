@@ -1,18 +1,43 @@
-#### Packages ####
-library(tidyverse)
+---
+title: "Standard Calibration Check"
+author: "Jaedon D. Swanson"
+format:
+  html:
+    code-fold: false
+    toc: true
+    theme: flatly
+---
 
-#### User inputs ####
+# Standard Calibration Check
+## Setup
+
+```{r}
+library(tidyverse)
+```
+
+## User inputs
+
+```{r}
 # Path to your CSV file (change as needed)
 data <- read.csv("Data/06262026.csv")
 
 # Which standard levels (1–7) should be flagged as problematic?
 # Example: ROWS_TO_DROP <- c(3, 5)  # drops std3 and std5
 ROWS_TO_DROP <- c()   # modify after inspecting the full curve
+```
 
+## Standard concentration mapping
+
+```{r}
 #### Concentration vector (µM) – index matches standard level ####
 # std1 → 0, std2 → 3.1, …, std7 → 88.6
 concentrations <- c(0, 3.1, 6.1, 11.9, 28.2, 51.7, 88.6)
 JITTER_WIDTH <- 0.15
+```
+
+## Clean and prepare the standard data
+
+```{r}
 #### Clean and rename columns ####
 data <- data %>%
   rename(
@@ -35,7 +60,11 @@ standards_raw <- data %>%
     Flagged       = Standard_Level %in% ROWS_TO_DROP
   ) %>%
   select(Standard_Level, Concentration, Replication, Absorbance, Flagged)
+```
 
+## Plot 1: Full calibration curve with flagged standards highlighted
+
+```{r}
 #### Plot 1: All standards (flagged shown) ####
 standards_good    <- standards_raw %>% filter(!Flagged)
 standards_flagged <- standards_raw %>% filter(Flagged)
@@ -119,7 +148,11 @@ plot_all <- ggplot() +
     plot.subtitle    = element_text(color = "gray40", size = 10)
   )
 print(plot_all)
+```
 
+## Plot 2: Filtered calibration curve excluding flagged standards
+
+```{r}
 #### Plot 2: Filtered curve (flagged levels removed) ####
 standards_filtered <- standards_raw %>% filter(!Flagged)
 
@@ -182,3 +215,4 @@ plot_filtered <- ggplot(standards_filtered, aes(x = Concentration, y = Absorbanc
     plot.subtitle    = element_text(color = "gray40", size = 10)
   )
 print(plot_filtered)
+```
